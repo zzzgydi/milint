@@ -10,7 +10,7 @@ import threading
 import queue
 import time
 
-MiLint_Version = '1.2'
+MiLint_Version = '1.3'
 MiLint_HELP = '''Usage:
   -d <dirname>          # 设置检查的文件夹
   -f <filename>         # 设置检查单一文件
@@ -84,37 +84,58 @@ class LintConf():
 class Tool():
     # 相对路径
     _reRelPath = re.compile(
-        r"^(\.{1,2}|(\.{1,2}[\\/]{1,2})*)([^\.\\/:]+[\\/]{1,2})*[^\.:]*(\.[^\.:]+)?"
+        r"^(?:\.{1,2}[\\/]{1,2})*(?:[^\.\\/:]+[\\/]{1,2})*[^\.:]*(?:\.[^\.:]+)?"
     )
     # win绝对路径 能匹配类似 'C://../' 这种
-    _reAbsPath = re.compile(r"^([A-Z]:)([\\/]{1,2}[^\\/]*)*", re.I)
+    # _reAbsPath = re.compile(r"^([A-Z]:)([\\/]{1,2}[^\\/]*)*", re.I)
     # Linux绝对路径 能匹配 '/../..' 但不能匹配 '../'
-    _reAbsLPath = re.compile(r"^([\\/]{1,2}[^\\/]*)*")
+    # _reAbsLPath = re.compile(r"^([\\/]{1,2}[^\\/]*)*")
     # 网络路径
     _reNetPath = re.compile(r"[a-zA-z]+://[^\s]*")
     # 匹配md中的图片语法
-    _reImgPatt = re.compile(r"!\[(.*?)\]\((.+)\)")
+    _reImgPatt = re.compile(r"(.*?)!\[(.*?)\]\((.+)\)(.*)")
     # 用于切割路径的正则
     _reSplitPath = re.compile(r"[\\/]{1,2}")
     # 用于查找md文件的正则
-    _reFindMd = re.compile(r'.*?\.md$')
+    _reFindMd = re.compile(r".*?\.md$")
 
-    _reList = [(_reAbsPath, 'abs'), (_reAbsLPath, 'abs'), (_reRelPath, 'rel'),
-               (_reNetPath, 'net')]
+    # _reList = [(_reAbsPath, 'abs'), (_reAbsLPath, 'abs'), (_reRelPath, 'rel'),
+    #           (_reNetPath, 'net')]
+
+    # 判断是否是相对路径
+    @staticmethod
+    def _isRelPath(path):
+        if path == '.' or path == '..':
+            return True
+        tmp = Tool._reRelPath.match(path)
+        if tmp and tmp.group(0) == path:
+            return True
+        return False
+
+    # 判断是否是网络路径
+    @staticmethod
+    def _isNetPath(path):
+        tmp = Tool._reNetPath.match(path)
+        if tmp and tmp.group(0) == path:
+            return True
+        return False
 
     # 判断路径类型 有相对路径、绝对路径、网络路径
     @staticmethod
     def getPathType(path):
-        for each in Tool._reList:
-            tmp = each[0].match(path)
-            if tmp and tmp.group(0) == path:
-                return each[1]
+        if os.path.isabs(path):
+            return 'abs'
+        if Tool._isRelPath(path):
+            return 'rel'
+        if Tool._isNetPath(path):
+            return 'net'
         return None
 
     # 将相对路径中的 反斜杠 转成斜杆
     @staticmethod
     def reviseRelPath(path):
-        return path.replace('\\', '/')
+        return re.sub(r'\\{1,2}|//', '/', path)
+        # return path.replace(r'\\{1,2}', '/')
 
     # 用于检查相对路径下的文件是否可以访问，传入参数，md文件的路径（绝对），图片路径（相对）
     @staticmethod
@@ -171,7 +192,7 @@ def inspectFile(filename):
         with open(filename, 'r', encoding='utf-8') as f:
             lines = f.readlines()
     except UnicodeDecodeError:
-        print('[Error]: UnicodeDecodeError - Please use utf-8...')
+        print('[Error]: UnicodeDecodeError--Please use utf-8...')
         print('  File:', filename)
         return
     for line in lines:
@@ -180,7 +201,7 @@ def inspectFile(filename):
         if not res:
             outstrs.append(line)
             continue
-        desc, path = res.group(1), res.group(2)
+        prefix, desc, path, postfix = res.groups()
         pathType = Tool.getPathType(path)
         if pathType == 'rel':
             path = Tool.reviseRelPath(path)
@@ -194,11 +215,12 @@ def inspectFile(filename):
         elif pathType == 'net':
             # 阻塞时间超长
             if conf.checkNet and not Tool.checkNetPath(path):
-                Tool.printMsg(0, 'Error', 'Invalid URL...', filename, num)
+                Tool.printMsg(0, 'Error', 'Invalid URL(%s)' % (path, ),
+                              filename, num)
         else:
             Tool.printMsg(0, 'warn', 'Invalid or unexperted image path.',
                           filename, num)
-        outstrs.append('![%s](%s)\n' % (desc, path))
+        outstrs.append('%s![%s](%s)%s\n' % (prefix, desc, path, postfix))
     # 对于存在绝对路径的md文件，如果有任意一个文件拷贝失败，就不改变源文件内容
     for each in workstack:
         if not os.path.exists(os.path.dirname(each['dst'])):
@@ -289,7 +311,7 @@ def multiScheduler():
 
 
 if __name__ == '__main__':
-    # time_start = time.time()
+    time_start = time.time()
     handleArgv()
     if len(conf.workdir) > len(conf.filename):
         # 工作区是文件夹
@@ -301,7 +323,6 @@ if __name__ == '__main__':
             multiScheduler()
     else:
         inspectFile(conf.filename)
-    print('=== MiLint work finished ===')
-    # time_end = time.time()
-    # print('time cost', time_end - time_start, 's')
+    time_cost = time.time() - time_start
+    print('=== MiLint work finished, cost %.4fs ===' % (time_cost, ))
     pass
